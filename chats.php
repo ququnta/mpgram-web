@@ -108,7 +108,7 @@ try {
 				echo '<a href="chats.php">'.MP::x($lng['all_chats']);
 			} else {
 				$sel = $fid == $f['id'];
-				echo '<a href="chats.php?f='.$f['id'].'"'.($sel?' class="fs"':'').'>'.MP::dehtml($f['title']);
+				echo '<a href="chats.php?f='.$f['id'].'"'.($sel?' class="fs"':'').'>'.MP::dehtml($f['title']['text'] ?? $f['title']);
 			}
 			echo '</a> ';
 		}
@@ -365,7 +365,7 @@ try {
 							elseif($mfn !== null)
 								echo '<a class="mn">'.$mfn.'</a>: ';
 							$txt = MP::dehtml(trim(str_replace("\r","",str_replace("\n", " ", $msg['message']))));
-							if(MP::utflen($txt) > 250) $txt = MP::utfsubstr($txt, 0, 250).'..';
+							if(MP::utflen($txt) > 250) $txt = trim(MP::utfsubstr($txt, 0, 250)).'..';
 							echo $txt;
 							echo '</a>';
 						} elseif(isset($msg['action'])) {

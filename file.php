@@ -200,21 +200,25 @@ try {
 			imagedestroy($img);
 			die;
 		} else {
-			$w = imagesx($img);
-			$h = imagesy($img);
+			if (strpos($p, 'r') === 0) {
+				$p = substr($p, 1);
+				$img = imagerotate($img, 270, 0);
+			}
+			$ow = imagesx($img);
+			$oh = imagesy($img);
+			$w = $ow;
+			$h = $oh;
 			$q = 50;
 			if($p == 'orig') {
 				$q = 80;
 			} elseif($p == 'prev') {
+				$h = $size;
+				$w = ($ow / $oh) * $h;
 				if($w > $size) {
-					$h = ($h/$w)*$size;
 					$w = $size;
-					$img = resize($img, $w, $h);
-				} elseif($h > $size) {
-					$w = ($w/$h)*$size;
-					$h = $size;
-					$img = resize($img, $w, $h);
+					$h = ($oh / $ow) * $w;
 				}
+				$img = resize($img, $w, $h);
 			} elseif($p == 'min') {
 				$q = 30;
 				if($h > 90) {
@@ -260,6 +264,27 @@ try {
 					$w = 36;
 					$img = resize($img, $w, $h);
 				}
+			} elseif($p == 'sprevs') {
+				$q = 30;
+				if($w > $size) {
+					$h = ($h/$w)*$size;
+					$w = $size;
+					$img = resize($img, $w, $h);
+				} elseif($h > $size) {
+					$w = ($w/$h)*$size;
+					$h = $size;
+					$img = resize($img, $w, $h);
+				}
+			} elseif($p == 'view') {
+				$q = 70;
+				$h = (int) $_GET['th'] ?? $size;
+				$w = ($ow / $oh) * $h;
+				$tw = (int) $_GET['tw'] ?? $size;
+				if($w > $tw) {
+					$w = $tw;
+					$h = ($oh / $ow) * $w;
+				}
+				$img = resize($img, $w, $h);
 			}
 		}
 		header('Content-Type: image/jpeg');
@@ -273,7 +298,7 @@ try {
 			unset($di['name']);
 			unset($di['ext']);
 		}
-		header('Cache-Control: no-cache, no-store');
+		header('Cache-Control: private, no-cache, no-store');
 		$MP->downloadToBrowser($di);
 	}
 } catch (Exception $e) {
