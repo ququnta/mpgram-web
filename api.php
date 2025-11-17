@@ -8,7 +8,7 @@ require_once("api_values.php");
 require_once("config.php");
 
 define("def", 1);
-define("api_version", 9);
+define("api_version", 10);
 define("api_version_min", 2);
 
 use danog\MadelineProto\Magic;
@@ -416,6 +416,10 @@ function parseMessage($rawMessage, $media=false, $short=false) {
 							}
 							$media['audio'] = $audio;
 						}
+						if ($v >= 10 && $attr['_'] == 'documentAttributeImageSize') {
+							$media['w'] = max($media['w'] ?? 0, $attr['w'] ?? 0);
+							$media['h'] = max($media['h'] ?? 0, $attr['h'] ?? 0);
+						}
 					}
 				}
 			} elseif (isset($rawMedia['webpage'])) {
@@ -457,6 +461,7 @@ function parseMessage($rawMessage, $media=false, $short=false) {
 		$rawReply = $rawMessage['reply_to'];
 		$reply = [];
 		$reply[$v < 5 ? 'msg' : 'id'] = $rawReply['reply_to_msg_id'] ?? null;
+		if ($v >= 10 && isset($rawReply['reply_to_top_id'])) $reply['top'] = $rawReply['reply_to_msg_id'];
 		if (isset($rawReply['reply_to_peer_id'])) $reply['peer'] = $rawReply['reply_to_peer_id'];
 		if (isset($rawReply['quote_text'])) $reply['quote'] = $rawReply['quote_text'];
 		if ($v >= 5 && !$short && isset($reply['id'])) {
@@ -481,6 +486,9 @@ function parseMessage($rawMessage, $media=false, $short=false) {
 		
 		if ($media && isset($rawMessage['reply_markup'])) {
 			$rows = $rawMessage['reply_markup']['rows'] ?? [];
+			if ($rawMessage['reply_markup']['single_use'] ?? false) {
+				$message['once'] = true;
+			}
 			$markup = [];
 			foreach ($rows as $row) {
 				$markupRow = [];
@@ -518,6 +526,13 @@ function parseMessage($rawMessage, $media=false, $short=false) {
 		if ($rawMessage['mentioned'] ?? false) {
 			$message['mention'] = true;
 		}
+	}
+	if ($v >= 10 && isset($rawMessage['reactions'])) {
+		$count = 0;
+		foreach (($rawMessage['reactions']['results'] ?? []) as $react) {
+			$count += $react['count'] ?? 0;
+		}
+		$message['reacts']['count'] = $count;
 	}
 	//$message['raw'] = $rawMessage;
 	return $message;
@@ -578,9 +593,9 @@ try {
 		$c = getCaptchaText(rand(6, 10));
 		$_SESSION['captcha_key'] = $c;
 		session_write_close();
-		$img = imagecreatetruecolor(150, 50);
+		$img = imagecreatetruecolor(120, 40);
 		imagefill($img, 0, 0, -1);
-		imagestring($img, rand(4, 10), rand(0, 50), rand(0, 25), $c, 0x000000);
+		imagestring($img, rand(4, 10), rand(0, 30), rand(0, 20), $c, 0x000000);
 		header("Cache-Control: no-store, no-cache, must-revalidate");
 		header('Content-type: image/png');
 		imagepng($img);
@@ -599,10 +614,10 @@ try {
 			http_response_code(403);
 			error(['message' => "Login API is disabled"]);
 		}
+		$id = $PARAMS['captcha_id'] ?? md5(random_bytes(32));
+		session_id('API'.$id);
+		session_start(['use_cookies' => '0']);
 		if (!isset($PARAMS['captcha_id']) || !isset($PARAMS['captcha_key'])) {
-			$id = md5(random_bytes(32));
-			session_id('API'.$id);
-			session_start(['use_cookies' => '0']);
 			$c = getCaptchaText(rand(6, 10));
 			$_SESSION['captcha_key'] = $c; 
 			json(['res' => 'need_captcha', 'captcha_id' => $id]);
@@ -610,8 +625,6 @@ try {
 			die();
 		}
 		checkParamEmpty('phone');
-		session_id('API'.$PARAMS['captcha_id']);
-		session_start(['use_cookies' => '0']);
 		if (!isset($_SESSION['captcha_key']) || empty($_SESSION['captcha_key'])) {
 			unset($_SESSION['captcha_key']);
 			$c = getCaptchaText(rand(6, 10));
@@ -658,11 +671,12 @@ try {
 			http_response_code(403);
 			error(['message' => "Login API is disabled"]);
 		}
-		checkParamEmpty('code');
+		checkParamEmpty('phone');
+		checkParamEmpty('hash');
 		checkAuth();
 		setupMadelineProto();
 		
-		$MP->auth->resendCode(['phone' => $phone, 'phone_code_hash' => $hash]);
+		$MP->auth->resendCode(['phone' => $PARAMS['phone'], 'phone_code_hash' => $PARAMS['hash']]);
 		json(['res' => 1]);
 		break;
 	case 'completePhoneLogin':
@@ -1277,6 +1291,24 @@ try {
 		$autoread = !isParamEmpty('read');
 		$thread = (int) getParam('top_msg', '0');
 		$longpoll = (int) getParam('longpoll', '1');
+		$checkmuted = !isParamEmpty('m');
+		$delay = (int) getParam('delay', '0');
+		if (getParam('p', '0') == '1') {
+			$types = [
+			'updateUserStatus',
+			'updateUserTyping',
+			'updateChatUserTyping',
+			'updateChannelUserTyping',
+			'updateNewMessage',
+			'updateNewChannelMessage',
+			'updateDeleteChannelMessages',
+			'updateDeleteMessages',
+			'updateEditMessage',
+			'updateEditChannelMessage',
+			'updateReadHistoryOutbox',
+			'updateReadChannelOutbox'
+			];
+		}
 		
 		$time = microtime(true);
 		$so = $offset;
@@ -1294,7 +1326,10 @@ try {
 			while (true) {
 				echo ' ';
 				flush();
-				if (connection_aborted() || ($longpoll && microtime(true) - $time >= $timeout)) break;
+				if (connection_aborted()
+					|| ($longpoll && (microtime(true) - $time >= $timeout ||
+					($delay && $res && microtime(true) - $time >= $delay))))
+					break;
 				$updates = $MP->getUpdates(['offset' => $offset, 'limit' => $limit, 'timeout' => 1]);
 				foreach ($updates as $update) {
 					if ($update['update_id'] == $so) continue;
@@ -1305,6 +1340,7 @@ try {
 					if ($type == 'updateNewMessage' || $type == 'updateNewChannelMessage'
 					|| $type == 'updateEditMessage' || $type == 'updateEditChannelMessage') {
 						$msg = $update['update']['message'];
+						$info = null;
 						if ($peer) {
 							if ($userPeer) {
 								if (($peer == $selfid && ($msg['from_id'] ?? $peer) != $peer)
@@ -1327,8 +1363,21 @@ try {
 								if ($msg['id'] == $i) continue;
 								$maxmsg = $msg['id'];
 							}
+						} else if ($checkmuted && $type != 'updateEditMessage' && $type != 'updateEditChannelMessage') {
+							$info = $MP->getFullInfo($msg['peer_id']);
+							if ($info['Chat']['left'] ?? false) {
+								$update['update']['left'] = true;
+							} else {
+								$mute = $info['full']['notify_settings']['mute_until'] ?? null;
+								if ($mute) $update['update']['mute_until'] = $mute;
+								if ($info['Chat']['broadcast'] ?? false) $update['update']['broadcast'] = true;
+								else if (isset($info['Chat'])) $update['update']['chat'] = true;
+							}
 						}
 						$update['update']['message'] = parseMessage($msg, $media);
+						if ($checkMuted && $type != 'updateEditMessage' && $type != 'updateEditChannelMessage') {
+							if ($info['Chat']['unread_count'] ?? false) $update['update']['message']['unread'] = $info['Chat']['unread_count'];
+						}
 						array_push($res, $update);
 					}
 					if (($userPeer || $peer == 0) && ($type == 'updateUserStatus' || $type == 'updateUserTyping')) {
@@ -1356,17 +1405,22 @@ try {
 							array_push($res, $update);
 						}
 					}
-					if ($peer && ($type == 'updateReadHistoryOutbox' || $type == 'updateReadChannelOutbox')) {
-						if (isset($update['update']['peer']) && parsePeer($update['update']['peer']) != $peer) continue;
-						if (isset($update['update']['channel_id']) && $update['update']['channel_id'] != $peer) continue;
-						array_push($res, $update);
+					if ($type == 'updateReadHistoryOutbox' || $type == 'updateReadChannelOutbox') {
+						if (isset($update['update']['peer'])) {
+							$update['update']['peer'] = parsePeer($update['update']['peer']);
+						}
+						if ($peer) {
+							if (isset($update['update']['peer']) && $update['update']['peer'] != $peer) continue;
+							if (isset($update['update']['channel_id']) && $update['update']['channel_id'] != $peer) continue;
+							array_push($res, $update);
+						}
 					}
 					// TODO updateDeleteMessages
 					
 					if ($peer) continue;
 					array_push($res, $update);
 				}
-				if ($res || !$longpoll) break;
+				if (($res && !$delay) || !$longpoll) break;
 			}
 			if (!$res) {
 				echo '{"res":[]}';
@@ -1716,6 +1770,7 @@ try {
 		json(['res' => $res]);
 		break;
 	case 'botCallback':
+	case 'sendBotCallback': // v10
 		checkAuth();
 		setupMadelineProto();
 		
@@ -1833,9 +1888,14 @@ try {
 		$peers = isParamEmpty('peers') ? false : explode(',', getParam('peers'));
 		$limit = (int) getParam('limit', '1000');
 		$includemuted = !isParamEmpty('include_muted');
-		$users = getParam('mute_users', '0');
-		$chats = getParam('mute_chats', '0');
-		$broadcasts = getParam('mute_broadcasts', '0');
+		$old = !isParamEmpty('mute_users');
+		$users = getParam($old ? 'mute_users' : 'mu', '0');
+		$chats = getParam($old ? 'mute_chats' : 'mc', '0');
+		$broadcasts = getParam($old ? 'mute_broadcasts' : 'mb', '0');
+		
+		if (!isParamEmpty('online')) {
+			$MP->account->updateStatus(['offline' => false]);
+		}
 		
 		$so = $offset;
 		$res = [];
